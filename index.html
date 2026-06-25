@@ -3,13 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>リアルタイム要約くん</title>
+<title>リアルタイム要約くん（Gemini文字起こし版）</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif;
          margin: 0; background: #f3f4f6; color: #1f2937; }
   header { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 14px; text-align: center; }
   header h1 { font-size: 1.2rem; margin: 0; display: inline-flex; align-items: center; gap: 8px; }
+  header .sub { font-size: .72rem; color: #6b7280; margin-top: 2px; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; animation: pulse 1s infinite; }
   @keyframes pulse { 0%{opacity:1} 50%{opacity:.3} 100%{opacity:1} }
 
@@ -51,18 +52,16 @@
   .btn-rec.active { background: #fee2e2; color: #dc2626; }
   .btn-rec.active:hover { background: #fecaca; }
 
-  .transcript { padding: 12px; background: #eff6ff; color: #1e3a8a; border-radius: 8px; font-size: .9rem; line-height: 1.7; }
-  .interim { padding: 12px; margin-top: 8px; background: #f9fafb; color: #6b7280; font-style: italic;
-             border: 1px dashed #d1d5db; border-radius: 8px; font-size: .9rem; }
+  .transcript { padding: 12px; background: #eff6ff; color: #1e3a8a; border-radius: 8px; font-size: .9rem; line-height: 1.8; white-space: pre-wrap; }
   .empty { color: #9ca3af; text-align: center; margin-top: 40px; font-size: .85rem; }
+  .flag { font-size: .72rem; color: #2563eb; }
 
   .summary-card { background: #fff; border: 1px solid #f3f4f6; border-radius: 8px; padding: 14px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
   .summary-card .time { font-size: .72rem; color: #9ca3af; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 8px; }
   .summary-card .text { font-size: .88rem; white-space: pre-wrap; line-height: 1.7; }
-  .summarizing { font-size: .72rem; color: #2563eb; }
 
   .debug { background: #111827; color: #6ee7b7; font-family: monospace; font-size: .72rem;
-           margin: 12px; padding: 10px; border-radius: 8px; max-height: 160px; overflow-y: auto; display: none; }
+           margin: 12px; padding: 10px; border-radius: 8px; max-height: 180px; overflow-y: auto; display: none; }
   .debug .line { white-space: pre-wrap; line-height: 1.5; }
 </style>
 </head>
@@ -70,6 +69,7 @@
 
 <header>
   <h1>リアルタイム要約くん <span id="recDot" class="dot" style="display:none"></span></h1>
+  <div class="sub">Gemini文字起こし版（ブラウザの音声認識を使わず、Gemini APIで文字起こしします）</div>
 </header>
 
 <div class="settings" id="settingsPanel">
@@ -81,20 +81,19 @@
       <input type="password" id="apiKey" placeholder="AIza...">
       <div class="hint">
         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio でキーを作成</a>。
-        作成後に <strong>「Gemini APIのみに制限」</strong>を必ず設定してください（未制限キーは現在ブロックされます）。
+        作成後に <strong>「Gemini APIのみに制限」</strong>を設定してください。
       </div>
     </div>
 
     <div class="field">
       <label>② 使用モデル</label>
       <input type="text" id="model" placeholder="gemini-2.5-flash">
-      <div class="hint">通常は <code>gemini-2.5-flash</code> のままでOK。新モデルに変えたい場合のみ書き換えます。</div>
+      <div class="hint">通常は <code>gemini-2.5-flash</code> のままでOK。文字起こし精度を上げたいときは <code>gemini-3.5-flash</code> も試せます。</div>
     </div>
 
     <div class="field">
-      <label>③ GAS ウェブアプリURL（ドキュメント書き込み用）</label>
+      <label>③ GAS ウェブアプリURL（ドキュメント書き込み用・任意）</label>
       <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/.../exec">
-      <div class="hint">空欄ならドキュメントへの自動転記は行いません（要約の表示だけ動きます）。</div>
     </div>
 
     <div class="field">
@@ -108,17 +107,23 @@
     </div>
 
     <div class="field">
-      <label>⑤ 要約の間隔（秒）</label>
+      <label>⑤ 文字起こしの間隔（秒）</label>
+      <input type="text" id="transcribeSec" placeholder="20">
+      <div class="hint">この秒数ごとに音声をまとめてGeminiへ送ります。短くすると反応が速い分、API消費が増えます。20〜30秒が目安です。</div>
+    </div>
+
+    <div class="field">
+      <label>⑥ 要約の間隔（秒）</label>
       <input type="text" id="intervalSec" placeholder="60">
     </div>
 
     <div class="field">
       <div class="label-row">
-        <label>⑥ 要約プロンプト（AIへの指示）</label>
+        <label>⑦ 要約プロンプト（AIへの指示）</label>
         <button type="button" class="link-btn" id="resetPromptBtn">デフォルトに戻す</button>
       </div>
       <textarea id="prompt" placeholder="例：以下の文字起こしを箇条書きで要約してください。"></textarea>
-      <div class="hint">話し合いの分析用・議事録用など、用途に合わせて自由に書き換えられます。空欄で保存するとデフォルトに戻ります。</div>
+      <div class="hint">空欄で保存するとデフォルトに戻ります。</div>
     </div>
 
     <div class="row">
@@ -140,7 +145,7 @@
 <main>
   <div class="pane pane-left">
     <div class="pane-head">
-      <span>音声認識ログ</span>
+      <span>文字起こしログ <span id="transcribingFlag" class="flag" style="display:none;">文字起こし中...</span></span>
       <div class="controls">
         <button class="btn-rec idle" id="recBtn">🎤 録音開始</button>
         <button class="btn btn-sub" id="summarizeNowBtn" style="padding:7px 12px;font-size:.8rem;">今すぐ要約</button>
@@ -148,15 +153,14 @@
     </div>
     <div class="pane-body">
       <div id="transcriptBox"></div>
-      <div id="interimBox"></div>
-      <div class="empty" id="transcriptEmpty">「録音開始」を押して話し始めてください</div>
+      <div class="empty" id="transcriptEmpty">「録音開始」を押して話してください（数十秒ごとに文字起こしが届きます）</div>
     </div>
   </div>
 
   <div class="pane pane-right">
     <div class="pane-head">
       <span id="intervalLabel">要約結果</span>
-      <span class="summarizing" id="summarizingFlag" style="display:none;">要約生成中...</span>
+      <span class="flag" id="summarizingFlag" style="display:none;">要約生成中...</span>
     </div>
     <div class="pane-body">
       <div id="summaryBox"></div>
@@ -168,17 +172,28 @@
 <script>
 "use strict";
 
-// ===== デフォルト設定 =====
+// ===== デフォルト =====
 const DEFAULT_PROMPT = "以下の音声を文字起こししたテキストを簡潔に要約してください。箇条書きで分かりやすくまとめてください。";
+const TRANSCRIBE_PROMPT = "あなたは正確な文字起こしエンジンです。次の音声を日本語で文字起こしし、実際に話された言葉のみを出力してください。前置き・要約・補足・話者ラベル・タイムスタンプ・括弧書きの説明は一切付けないでください。聞き取れる発話が無い場合は、何も出力しないでください。";
 
 // ===== 状態 =====
-let recognition = null;
 let isListening = false;
 let isStarting = false;
 let transcripts = [];
 let summaries = [];
 let lastSummarizedIndex = 0;
 let summaryTimer = null;
+let transcribeTimer = null;
+
+// 音声キャプチャ
+let mediaStream = null;
+let audioContext = null;
+let sourceNode = null;
+let processorNode = null;
+let muteNode = null;
+let pcmChunks = [];
+let captureSampleRate = 48000;
+const TARGET_RATE = 16000;
 
 // ===== DOMヘルパー =====
 const $ = (id) => document.getElementById(id);
@@ -191,9 +206,8 @@ function log(msg) {
   div.className = "line";
   div.textContent = line;
   box.insertBefore(div, box.firstChild);
-  while (box.children.length > 50) box.removeChild(box.lastChild);
+  while (box.children.length > 60) box.removeChild(box.lastChild);
 }
-
 function showBanner(text, type) {
   const b = $("banner");
   b.innerHTML = '<div class="banner ' + type + '">' + text + '</div>';
@@ -201,12 +215,13 @@ function showBanner(text, type) {
 }
 function clearBanner() { $("banner").innerHTML = ""; }
 
-// ===== 設定の読み書き =====
+// ===== 設定 =====
 function loadSettings() {
   $("apiKey").value = localStorage.getItem("rsk_apiKey") || "";
   $("model").value = localStorage.getItem("rsk_model") || "gemini-2.5-flash";
   $("gasUrl").value = localStorage.getItem("rsk_gasUrl") || "";
   $("docUrl").value = localStorage.getItem("rsk_docUrl") || "";
+  $("transcribeSec").value = localStorage.getItem("rsk_transcribe") || "20";
   $("intervalSec").value = localStorage.getItem("rsk_interval") || "60";
   $("prompt").value = localStorage.getItem("rsk_prompt") || DEFAULT_PROMPT;
   updateIntervalLabel();
@@ -216,8 +231,8 @@ function saveSettings() {
   localStorage.setItem("rsk_model", ($("model").value.trim() || "gemini-2.5-flash"));
   localStorage.setItem("rsk_gasUrl", $("gasUrl").value.trim());
   localStorage.setItem("rsk_docUrl", $("docUrl").value.trim());
+  localStorage.setItem("rsk_transcribe", ($("transcribeSec").value.trim() || "20"));
   localStorage.setItem("rsk_interval", ($("intervalSec").value.trim() || "60"));
-  // 空欄で保存したらデフォルトに戻す
   const p = $("prompt").value.trim();
   localStorage.setItem("rsk_prompt", p || DEFAULT_PROMPT);
   if (!p) $("prompt").value = DEFAULT_PROMPT;
@@ -225,138 +240,134 @@ function saveSettings() {
   showBanner("設定を保存しました。", "ok");
 }
 function getSetting(key) { return localStorage.getItem("rsk_" + key) || ""; }
-function getPrompt() {
-  const p = localStorage.getItem("rsk_prompt");
-  return (p && p.trim()) ? p : DEFAULT_PROMPT;
-}
-function getIntervalMs() {
-  const sec = parseInt(getSetting("interval") || "60", 10);
-  return (isNaN(sec) || sec < 10 ? 60 : sec) * 1000;
-}
-function updateIntervalLabel() {
-  const sec = parseInt(getSetting("interval") || "60", 10);
-  $("intervalLabel").textContent = (isNaN(sec) ? 60 : sec) + "秒ごとの要約結果";
-}
+function getPrompt() { const p = localStorage.getItem("rsk_prompt"); return (p && p.trim()) ? p : DEFAULT_PROMPT; }
+function getIntervalMs() { const s = parseInt(getSetting("interval") || "60", 10); return (isNaN(s) || s < 10 ? 60 : s) * 1000; }
+function getTranscribeMs() { const s = parseInt(getSetting("transcribe") || "20", 10); return (isNaN(s) || s < 5 ? 20 : s) * 1000; }
+function updateIntervalLabel() { const s = parseInt(getSetting("interval") || "60", 10); $("intervalLabel").textContent = (isNaN(s) ? 60 : s) + "秒ごとの要約結果"; }
+function extractDocId(input) { if (!input) return ""; const m = String(input).match(/\/document\/d\/([a-zA-Z0-9-_]+)/); return m ? m[1] : String(input).trim(); }
 
-// ドキュメントURL/IDからID部分を取り出す
-function extractDocId(input) {
-  if (!input) return "";
-  const m = String(input).match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
-  return m ? m[1] : String(input).trim();
-}
-
-// ===== 音声認識 =====
-function initRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  log("iframe内: " + (window.self !== window.top) + " / secureContext: " + window.isSecureContext);
-  if (!SR) {
-    showBanner("このブラウザは音声認識に対応していません（ChromeまたはEdgeをご利用ください）。", "error");
-    log("SpeechRecognition が存在しません");
-    return;
+// ===== 音声処理ユーティリティ =====
+function downsampleBuffer(buffer, sourceRate, targetRate) {
+  if (targetRate >= sourceRate) return buffer;
+  const ratio = sourceRate / targetRate;
+  const newLen = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLen);
+  let offsetResult = 0, offsetBuffer = 0;
+  while (offsetResult < newLen) {
+    const nextOffset = Math.round((offsetResult + 1) * ratio);
+    let accum = 0, count = 0;
+    for (let i = offsetBuffer; i < nextOffset && i < buffer.length; i++) { accum += buffer[i]; count++; }
+    result[offsetResult] = count ? accum / count : 0;
+    offsetResult++; offsetBuffer = nextOffset;
   }
-  log("SpeechRecognition は利用可能");
-
-  recognition = new SR();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = "ja-JP";
-
-  recognition.onstart = () => log("● onstart: 認識開始");
-  recognition.onaudiostart = () => log("● onaudiostart: 音声取り込み開始");
-  recognition.onspeechstart = () => log("● onspeechstart: 発話検出");
-
-  recognition.onresult = (event) => {
-    let final = "", interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const t = event.results[i][0].transcript;
-      if (event.results[i].isFinal) final += t; else interim += t;
-    }
-    if (final) {
-      transcripts.push(final);
-      renderTranscripts();
-      log("✓ 確定: " + final);
-    }
-    $("interimBox").innerHTML = interim ? '<div class="interim">' + escapeHtml(interim) + "</div>" : "";
-  };
-
-  recognition.onerror = (event) => {
-    log("✗ onerror: " + event.error + (event.message ? " / " + event.message : ""));
-    if (event.error === "aborted" || event.error === "no-speech") return;
-    const messages = {
-      "not-allowed": "マイクへのアクセスが許可されていません。ブラウザ/OSのマイク設定を確認してください。",
-      "service-not-allowed": "音声認識サービスがこの環境で利用できません。",
-      "network": "音声認識サーバーに接続できません（ネットワーク/プロキシ）。",
-      "audio-capture": "マイクが見つかりません。OS側のマイク許可を確認してください。",
-      "language-not-supported": "日本語認識がサポートされていません。"
-    };
-    showBanner(messages[event.error] || ("音声認識エラー: " + event.error), "error");
-    if (["not-allowed","service-not-allowed","network","audio-capture","language-not-supported"].includes(event.error)) {
-      stopListening();
-    }
-  };
-
-  recognition.onend = () => {
-    log("onend: セッション終了");
-    if (isListening) {
-      setTimeout(() => {
-        if (isListening) { try { recognition.start(); } catch (e) { log("再開失敗: " + e.message); } }
-      }, 300);
-    }
-  };
+  return result;
+}
+function encodeWAV(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    let s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+  return buffer;
+}
+function arrayBufferToBase64(buf) {
+  let binary = "";
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+function rms(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
 }
 
+// ===== 録音開始/停止 =====
 async function startListening() {
-  // すでに認識中／起動処理中なら何もしない（二重起動防止）
-  if (isListening || isStarting) { log("既に認識中のため起動をスキップ"); return; }
+  if (isListening || isStarting) { log("既に録音中"); return; }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showBanner("このブラウザではマイクAPIが使えません。", "error");
-    return;
+    showBanner("このブラウザではマイクAPIが使えません。", "error"); return;
   }
   clearBanner();
-  isStarting = true;
-  isListening = true;   // ボタンを押した瞬間に「停止」表示へ（押し直しは stop に向く）
-  updateRecUI();
+  isStarting = true; isListening = true; updateRecUI();
 
-  // マイク権限の事前確認（起動時のみ。動作中は実行しないので認識を妨害しない）
   try {
-    log("getUserMedia 事前チェック...");
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    log("✓ マイク取得成功: " + (stream.getAudioTracks().map(t => t.label).join(", ") || "(ラベル空)"));
-    stream.getTracks().forEach(t => t.stop());
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    log("✓ マイク取得成功: " + (mediaStream.getAudioTracks().map(t => t.label).join(", ") || "(ラベル空)"));
   } catch (e) {
     log("✗ getUserMedia 失敗: " + e.name + " / " + e.message);
     showBanner("マイクを取得できません（" + e.name + "）。ブラウザ/OSの設定を確認してください。", "error");
-    isListening = false; isStarting = false; updateRecUI();
-    return;
+    isListening = false; isStarting = false; updateRecUI(); return;
   }
-
-  // 待っている間に停止が押されていたら起動しない
-  if (!isListening) { isStarting = false; return; }
+  if (!isListening) { isStarting = false; cleanupAudio(); return; }
 
   try {
-    recognition.start();
-    log("recognition.start() 呼び出し");
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioContext.state === "suspended") await audioContext.resume();
+    captureSampleRate = audioContext.sampleRate;
+    log("AudioContext sampleRate: " + captureSampleRate);
+    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+    processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+    pcmChunks = [];
+    processorNode.onaudioprocess = (e) => {
+      if (!isListening) return;
+      pcmChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    muteNode = audioContext.createGain();
+    muteNode.gain.value = 0; // スピーカーには出さない（ハウリング防止）
+    sourceNode.connect(processorNode);
+    processorNode.connect(muteNode);
+    muteNode.connect(audioContext.destination);
   } catch (e) {
-    // 「already started」は既に動いている合図なので無害。それ以外だけ記録
-    if (e.name === "InvalidStateError") {
-      log("既に開始済み（無視してOK）");
-    } else {
-      log("start例外: " + e.message);
-    }
+    log("音声処理の初期化失敗: " + e.message);
+    showBanner("音声処理を開始できませんでした：" + e.message, "error");
+    isListening = false; isStarting = false; updateRecUI(); cleanupAudio(); return;
   }
-  isStarting = false;
 
-  // 要約タイマー開始
-  if (summaryTimer) clearInterval(summaryTimer);
+  isStarting = false;
+  transcribeTimer = setInterval(flushAndTranscribe, getTranscribeMs());
   summaryTimer = setInterval(runSummary, getIntervalMs());
+  log("録音開始（" + (getTranscribeMs() / 1000) + "秒ごとに文字起こし）");
 }
 
-function stopListening() {
-  isListening = false;
-  isStarting = false;
-  updateRecUI();
-  if (recognition) { try { recognition.stop(); } catch (e) {} }
+async function stopListening() {
+  if (!isListening && !isStarting) return;
+  isListening = false; isStarting = false; updateRecUI();
+  if (transcribeTimer) { clearInterval(transcribeTimer); transcribeTimer = null; }
   if (summaryTimer) { clearInterval(summaryTimer); summaryTimer = null; }
+  log("停止。残りの音声を文字起こしします");
+  await flushAndTranscribe(); // 最後の音声を取りこぼさない
+  cleanupAudio();
+}
+
+function cleanupAudio() {
+  try { processorNode && processorNode.disconnect(); } catch (e) {}
+  try { sourceNode && sourceNode.disconnect(); } catch (e) {}
+  try { muteNode && muteNode.disconnect(); } catch (e) {}
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  if (audioContext) { try { audioContext.close(); } catch (e) {} audioContext = null; }
+  processorNode = sourceNode = muteNode = null;
+  pcmChunks = [];
 }
 
 function updateRecUI() {
@@ -372,6 +383,63 @@ function updateRecUI() {
   }
 }
 
+// ===== 文字起こし =====
+async function flushAndTranscribe() {
+  if (!pcmChunks.length) return;
+  const chunks = pcmChunks; pcmChunks = [];
+  let total = 0; for (const c of chunks) total += c.length;
+  const merged = new Float32Array(total);
+  let off = 0; for (const c of chunks) { merged.set(c, off); off += c.length; }
+
+  const down = downsampleBuffer(merged, captureSampleRate, TARGET_RATE);
+  if (down.length < TARGET_RATE * 0.8) { log("音声が短いためスキップ"); return; }
+  const level = rms(down);
+  if (level < 0.004) { log("無音のためスキップ (rms=" + level.toFixed(4) + ")"); return; }
+
+  const wav = encodeWAV(down, TARGET_RATE);
+  const b64 = arrayBufferToBase64(wav);
+  log("文字起こし送信: " + (wav.byteLength / 1024).toFixed(0) + "KB (rms=" + level.toFixed(3) + ")");
+
+  $("transcribingFlag").style.display = "inline";
+  try {
+    const text = await transcribeAudio(b64);
+    const clean = (text || "").trim();
+    if (clean) {
+      transcripts.push(clean);
+      renderTranscripts();
+      log("✓ 文字起こし: " + clean);
+    } else {
+      log("△ 文字起こし結果なし");
+    }
+  } catch (e) {
+    log("✗ 文字起こしエラー: " + e.message);
+    showBanner("文字起こしに失敗：" + e.message, "error");
+  } finally {
+    $("transcribingFlag").style.display = "none";
+  }
+}
+
+async function transcribeAudio(b64) {
+  const apiKey = getSetting("apiKey");
+  const model = getSetting("model") || "gemini-2.5-flash";
+  if (!apiKey) throw new Error("APIキーが未設定です。");
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/" +
+              encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(apiKey);
+  const payload = {
+    contents: [{ parts: [
+      { text: TRANSCRIBE_PROMPT },
+      { inline_data: { mime_type: "audio/wav", data: b64 } }
+    ] }]
+  };
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error("HTTP " + res.status + " " + t.slice(0, 200));
+  }
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+}
+
 // ===== 描画 =====
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -379,7 +447,7 @@ function escapeHtml(s) {
 function renderTranscripts() {
   $("transcriptEmpty").style.display = transcripts.length ? "none" : "block";
   $("transcriptBox").innerHTML = transcripts.length
-    ? '<div class="transcript">' + escapeHtml(transcripts.join("")) + "</div>" : "";
+    ? '<div class="transcript">' + escapeHtml(transcripts.join("\n")) + "</div>" : "";
 }
 function renderSummaries() {
   $("summaryEmpty").style.display = summaries.length ? "none" : "block";
@@ -394,7 +462,6 @@ async function fetchGeminiSummary(text) {
   const apiKey = getSetting("apiKey");
   const model = getSetting("model") || "gemini-2.5-flash";
   if (!apiKey) throw new Error("APIキーが未設定です。");
-
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" +
               encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(apiKey);
   const payload = {
@@ -404,15 +471,8 @@ async function fetchGeminiSummary(text) {
   const delays = [1000, 2000, 4000, 8000];
   for (let i = 0; i < 4; i++) {
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error("HTTP " + res.status + " " + errText.slice(0, 200));
-      }
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!res.ok) { const t = await res.text().catch(() => ""); throw new Error("HTTP " + res.status + " " + t.slice(0, 200)); }
       const data = await res.json();
       return data.candidates?.[0]?.content?.parts?.[0]?.text || "要約を取得できませんでした。";
     } catch (e) {
@@ -423,25 +483,21 @@ async function fetchGeminiSummary(text) {
   }
 }
 
-// ===== GAS 連携（書き込み）=====
+// ===== GAS 連携 =====
 async function sendToGoogleDocs(summaryText) {
   const gasUrl = getSetting("gasUrl");
   const docId = extractDocId(getSetting("docUrl"));
   if (!gasUrl) { log("GAS URL未設定のため転記スキップ"); return; }
   try {
-    // text/plain にすることでCORSプリフライトを回避（GASはプリフライト非対応のため）
     await fetch(gasUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ action: "write", summary: summaryText, docId: docId, timestamp: new Date().toISOString() })
     });
     log("ドキュメントへ送信しました");
-  } catch (e) {
-    log("ドキュメント送信エラー: " + e.message);
-  }
+  } catch (e) { log("ドキュメント送信エラー: " + e.message); }
 }
 
-// ===== 接続テスト =====
 async function testConnection() {
   clearBanner();
   const gasUrl = getSetting("gasUrl");
@@ -456,15 +512,11 @@ async function testConnection() {
       body: JSON.stringify({ action: "validate", docId: docId })
     });
     const data = await res.json();
-    if (data.status === "success") {
-      showBanner("接続OK：書き込み先ドキュメント「" + escapeHtml(data.title) + "」を確認しました。", "ok");
-    } else {
-      showBanner("GASエラー：" + escapeHtml(data.message || "不明なエラー"), "error");
-    }
+    if (data.status === "success") showBanner("接続OK：書き込み先「" + escapeHtml(data.title) + "」を確認しました。", "ok");
+    else showBanner("GASエラー：" + escapeHtml(data.message || "不明なエラー"), "error");
   } catch (e) {
-    // 応答が読めない環境向けフォールバック
     log("テスト応答の読み取り失敗: " + e.message);
-    showBanner("テスト要求は送信しました。応答を読み取れなかったため、ドキュメント側に反映されるか直接ご確認ください。", "ok");
+    showBanner("テスト要求は送信しました。応答を読み取れなかったため、ドキュメント側で反映をご確認ください。", "ok");
   }
 }
 
@@ -481,7 +533,7 @@ async function runSummary() {
     await sendToGoogleDocs(summary);
   } catch (e) {
     log("要約エラー: " + e.message);
-    showBanner("要約に失敗しました：" + escapeHtml(e.message), "error");
+    showBanner("要約に失敗：" + escapeHtml(e.message), "error");
   } finally {
     $("summarizingFlag").style.display = "none";
   }
@@ -508,8 +560,7 @@ $("toggleDebug").addEventListener("click", () => {
 
 // ===== 初期化 =====
 loadSettings();
-initRecognition();
-// APIキー未設定なら設定を開いたまま、設定済みなら畳む
+log("Gemini文字起こし版を起動しました");
 if (getSetting("apiKey")) { $("settingsPanel").style.display = "none"; }
 </script>
 </body>
