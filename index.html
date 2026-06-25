@@ -18,8 +18,11 @@
   .settings h2 { font-size: .95rem; margin: 0 0 10px; color: #374151; }
   .field { margin-bottom: 10px; }
   .field label { display: block; font-size: .8rem; color: #4b5563; margin-bottom: 3px; }
-  .field input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: .9rem; }
-  .field input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }
+  .field input, .field textarea { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: .9rem; font-family: inherit; }
+  .field textarea { resize: vertical; min-height: 80px; line-height: 1.6; }
+  .field input:focus, .field textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }
+  .label-row { display: flex; justify-content: space-between; align-items: center; }
+  .link-btn { background: none; border: none; color: #2563eb; font-size: .75rem; cursor: pointer; text-decoration: underline; padding: 0; }
   .hint { font-size: .72rem; color: #6b7280; margin-top: 3px; }
   .hint a { color: #2563eb; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -97,11 +100,25 @@
     <div class="field">
       <label>④ 書き込み先 GoogleドキュメントのURL または ID</label>
       <input type="text" id="docUrl" placeholder="https://docs.google.com/document/d/.../edit">
+      <div class="hint">
+        書き込み先がまだ無い場合は
+        <a href="https://docs.google.com/document/d/1Fo4AeRCJ6EYgCP2A2tNQlXcifBmvGEh4fNTE4zpaucM/template/preview" target="_blank" rel="noopener">テンプレート「リアルタイム要約くん連携サーバー」をコピーして作成</a>
+        し、できたドキュメントのURLを上の欄に貼り付けてください。
+      </div>
     </div>
 
     <div class="field">
       <label>⑤ 要約の間隔（秒）</label>
       <input type="text" id="intervalSec" placeholder="60">
+    </div>
+
+    <div class="field">
+      <div class="label-row">
+        <label>⑥ 要約プロンプト（AIへの指示）</label>
+        <button type="button" class="link-btn" id="resetPromptBtn">デフォルトに戻す</button>
+      </div>
+      <textarea id="prompt" placeholder="例：以下の文字起こしを箇条書きで要約してください。"></textarea>
+      <div class="hint">話し合いの分析用・議事録用など、用途に合わせて自由に書き換えられます。空欄で保存するとデフォルトに戻ります。</div>
     </div>
 
     <div class="row">
@@ -151,6 +168,9 @@
 <script>
 "use strict";
 
+// ===== デフォルト設定 =====
+const DEFAULT_PROMPT = "以下の音声を文字起こししたテキストを簡潔に要約してください。箇条書きで分かりやすくまとめてください。";
+
 // ===== 状態 =====
 let recognition = null;
 let isListening = false;
@@ -187,6 +207,7 @@ function loadSettings() {
   $("gasUrl").value = localStorage.getItem("rsk_gasUrl") || "";
   $("docUrl").value = localStorage.getItem("rsk_docUrl") || "";
   $("intervalSec").value = localStorage.getItem("rsk_interval") || "60";
+  $("prompt").value = localStorage.getItem("rsk_prompt") || DEFAULT_PROMPT;
   updateIntervalLabel();
 }
 function saveSettings() {
@@ -195,10 +216,18 @@ function saveSettings() {
   localStorage.setItem("rsk_gasUrl", $("gasUrl").value.trim());
   localStorage.setItem("rsk_docUrl", $("docUrl").value.trim());
   localStorage.setItem("rsk_interval", ($("intervalSec").value.trim() || "60"));
+  // 空欄で保存したらデフォルトに戻す
+  const p = $("prompt").value.trim();
+  localStorage.setItem("rsk_prompt", p || DEFAULT_PROMPT);
+  if (!p) $("prompt").value = DEFAULT_PROMPT;
   updateIntervalLabel();
   showBanner("設定を保存しました。", "ok");
 }
 function getSetting(key) { return localStorage.getItem("rsk_" + key) || ""; }
+function getPrompt() {
+  const p = localStorage.getItem("rsk_prompt");
+  return (p && p.trim()) ? p : DEFAULT_PROMPT;
+}
 function getIntervalMs() {
   const sec = parseInt(getSetting("interval") || "60", 10);
   return (isNaN(sec) || sec < 10 ? 60 : sec) * 1000;
@@ -348,7 +377,7 @@ async function fetchGeminiSummary(text) {
               encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(apiKey);
   const payload = {
     contents: [{ parts: [{ text }] }],
-    systemInstruction: { parts: [{ text: "以下の音声を文字起こししたテキストを簡潔に要約してください。箇条書きで分かりやすくまとめてください。" }] }
+    systemInstruction: { parts: [{ text: getPrompt() }] }
   };
   const delays = [1000, 2000, 4000, 8000];
   for (let i = 0; i < 4; i++) {
@@ -439,6 +468,11 @@ async function runSummary() {
 // ===== イベント =====
 $("saveBtn").addEventListener("click", saveSettings);
 $("testBtn").addEventListener("click", testConnection);
+$("resetPromptBtn").addEventListener("click", () => {
+  $("prompt").value = DEFAULT_PROMPT;
+  localStorage.setItem("rsk_prompt", DEFAULT_PROMPT);
+  showBanner("プロンプトをデフォルトに戻しました。", "ok");
+});
 $("recBtn").addEventListener("click", () => { isListening ? stopListening() : startListening(); });
 $("summarizeNowBtn").addEventListener("click", runSummary);
 $("toggleSettings").addEventListener("click", () => {
