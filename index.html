@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>リアルタイム要約くん</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif;
+         margin: 0; background: #f3f4f6; color: #1f2937; }
+  header { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 14px; text-align: center; }
+  header h1 { font-size: 1.2rem; margin: 0; display: inline-flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%{opacity:1} 50%{opacity:.3} 100%{opacity:1} }
+
+  .settings { background: #fff; border-bottom: 1px solid #e5e7eb; padding: 16px; }
+  .settings .inner { max-width: 760px; margin: 0 auto; }
+  .settings h2 { font-size: .95rem; margin: 0 0 10px; color: #374151; }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: .8rem; color: #4b5563; margin-bottom: 3px; }
+  .field input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: .9rem; }
+  .field input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }
+  .hint { font-size: .72rem; color: #6b7280; margin-top: 3px; }
+  .hint a { color: #2563eb; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { border: none; border-radius: 6px; padding: 9px 14px; font-size: .9rem; cursor: pointer; }
+  .btn-primary { background: #1f2937; color: #fff; }
+  .btn-primary:hover { background: #374151; }
+  .btn-sub { background: #e5e7eb; color: #374151; }
+  .btn-sub:hover { background: #d1d5db; }
+  .toggle-settings { background: none; border: none; color: #6b7280; font-size: .8rem; cursor: pointer; text-decoration: underline; }
+
+  .banner { padding: 12px 16px; margin: 12px; border-radius: 6px; font-size: .85rem; }
+  .banner.error { background: #fee2e2; color: #b91c1c; border-left: 4px solid #ef4444; }
+  .banner.ok { background: #dcfce7; color: #166534; border-left: 4px solid #22c55e; }
+
+  main { display: flex; flex-wrap: wrap; }
+  .pane { flex: 1 1 320px; min-height: 50vh; display: flex; flex-direction: column; }
+  .pane-left { background: #fff; border-right: 1px solid #e5e7eb; }
+  .pane-right { background: #f9fafb; }
+  .pane-head { padding: 10px 12px; background: #f3f4f6; border-bottom: 1px solid #e5e7eb;
+               font-weight: 600; color: #4b5563; display: flex; justify-content: space-between; align-items: center; font-size: .9rem; }
+  .pane-body { flex: 1; padding: 14px; overflow-y: auto; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  .btn-rec { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 7px 14px; font-size: .85rem; font-weight: 500; border: none; cursor: pointer; }
+  .btn-rec.idle { background: #2563eb; color: #fff; }
+  .btn-rec.idle:hover { background: #1d4ed8; }
+  .btn-rec.active { background: #fee2e2; color: #dc2626; }
+  .btn-rec.active:hover { background: #fecaca; }
+
+  .transcript { padding: 12px; background: #eff6ff; color: #1e3a8a; border-radius: 8px; font-size: .9rem; line-height: 1.7; }
+  .interim { padding: 12px; margin-top: 8px; background: #f9fafb; color: #6b7280; font-style: italic;
+             border: 1px dashed #d1d5db; border-radius: 8px; font-size: .9rem; }
+  .empty { color: #9ca3af; text-align: center; margin-top: 40px; font-size: .85rem; }
+
+  .summary-card { background: #fff; border: 1px solid #f3f4f6; border-radius: 8px; padding: 14px; margin-bottom: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .summary-card .time { font-size: .72rem; color: #9ca3af; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 8px; }
+  .summary-card .text { font-size: .88rem; white-space: pre-wrap; line-height: 1.7; }
+  .summarizing { font-size: .72rem; color: #2563eb; }
+
+  .debug { background: #111827; color: #6ee7b7; font-family: monospace; font-size: .72rem;
+           margin: 12px; padding: 10px; border-radius: 8px; max-height: 160px; overflow-y: auto; display: none; }
+  .debug .line { white-space: pre-wrap; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>リアルタイム要約くん <span id="recDot" class="dot" style="display:none"></span></h1>
+</header>
+
+<div class="settings" id="settingsPanel">
+  <div class="inner">
+    <h2>⚙️ 設定（このブラウザに保存されます）</h2>
+
+    <div class="field">
+      <label>① Gemini APIキー</label>
+      <input type="password" id="apiKey" placeholder="AIza...">
+      <div class="hint">
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio でキーを作成</a>。
+        作成後に <strong>「Gemini APIのみに制限」</strong>を必ず設定してください（未制限キーは現在ブロックされます）。
+      </div>
+    </div>
+
+    <div class="field">
+      <label>② 使用モデル</label>
+      <input type="text" id="model" placeholder="gemini-2.5-flash">
+      <div class="hint">通常は <code>gemini-2.5-flash</code> のままでOK。新モデルに変えたい場合のみ書き換えます。</div>
+    </div>
+
+    <div class="field">
+      <label>③ GAS ウェブアプリURL（ドキュメント書き込み用）</label>
+      <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/.../exec">
+      <div class="hint">空欄ならドキュメントへの自動転記は行いません（要約の表示だけ動きます）。</div>
+    </div>
+
+    <div class="field">
+      <label>④ 書き込み先 GoogleドキュメントのURL または ID</label>
+      <input type="text" id="docUrl" placeholder="https://docs.google.com/document/d/.../edit">
+    </div>
+
+    <div class="field">
+      <label>⑤ 要約の間隔（秒）</label>
+      <input type="text" id="intervalSec" placeholder="60">
+    </div>
+
+    <div class="row">
+      <button class="btn btn-primary" id="saveBtn">設定を保存</button>
+      <button class="btn btn-sub" id="testBtn">接続テスト（ドキュメント確認）</button>
+    </div>
+  </div>
+</div>
+
+<div id="banner"></div>
+
+<div style="text-align:center; padding:6px;">
+  <button class="toggle-settings" id="toggleSettings">設定を開く / 閉じる</button>
+  <button class="toggle-settings" id="toggleDebug" style="margin-left:12px;">詳細ログ表示</button>
+</div>
+
+<div class="debug" id="debug"></div>
+
+<main>
+  <div class="pane pane-left">
+    <div class="pane-head">
+      <span>音声認識ログ</span>
+      <div class="controls">
+        <button class="btn-rec idle" id="recBtn">🎤 録音開始</button>
+        <button class="btn btn-sub" id="summarizeNowBtn" style="padding:7px 12px;font-size:.8rem;">今すぐ要約</button>
+      </div>
+    </div>
+    <div class="pane-body">
+      <div id="transcriptBox"></div>
+      <div id="interimBox"></div>
+      <div class="empty" id="transcriptEmpty">「録音開始」を押して話し始めてください</div>
+    </div>
+  </div>
+
+  <div class="pane pane-right">
+    <div class="pane-head">
+      <span id="intervalLabel">要約結果</span>
+      <span class="summarizing" id="summarizingFlag" style="display:none;">要約生成中...</span>
+    </div>
+    <div class="pane-body">
+      <div id="summaryBox"></div>
+      <div class="empty" id="summaryEmpty">設定した間隔ごとに要約が表示されます</div>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+// ===== 状態 =====
+let recognition = null;
+let isListening = false;
+let transcripts = [];
+let summaries = [];
+let lastSummarizedIndex = 0;
+let summaryTimer = null;
+
+// ===== DOMヘルパー =====
+const $ = (id) => document.getElementById(id);
+
+function log(msg) {
+  const line = new Date().toLocaleTimeString() + "  " + msg;
+  console.log("[要約くん]", line);
+  const box = $("debug");
+  const div = document.createElement("div");
+  div.className = "line";
+  div.textContent = line;
+  box.insertBefore(div, box.firstChild);
+  while (box.children.length > 50) box.removeChild(box.lastChild);
+}
+
+function showBanner(text, type) {
+  const b = $("banner");
+  b.innerHTML = '<div class="banner ' + type + '">' + text + '</div>';
+  if (type === "ok") setTimeout(() => { b.innerHTML = ""; }, 4000);
+}
+function clearBanner() { $("banner").innerHTML = ""; }
+
+// ===== 設定の読み書き =====
+function loadSettings() {
+  $("apiKey").value = localStorage.getItem("rsk_apiKey") || "";
+  $("model").value = localStorage.getItem("rsk_model") || "gemini-2.5-flash";
+  $("gasUrl").value = localStorage.getItem("rsk_gasUrl") || "";
+  $("docUrl").value = localStorage.getItem("rsk_docUrl") || "";
+  $("intervalSec").value = localStorage.getItem("rsk_interval") || "60";
+  updateIntervalLabel();
+}
+function saveSettings() {
+  localStorage.setItem("rsk_apiKey", $("apiKey").value.trim());
+  localStorage.setItem("rsk_model", ($("model").value.trim() || "gemini-2.5-flash"));
+  localStorage.setItem("rsk_gasUrl", $("gasUrl").value.trim());
+  localStorage.setItem("rsk_docUrl", $("docUrl").value.trim());
+  localStorage.setItem("rsk_interval", ($("intervalSec").value.trim() || "60"));
+  updateIntervalLabel();
+  showBanner("設定を保存しました。", "ok");
+}
+function getSetting(key) { return localStorage.getItem("rsk_" + key) || ""; }
+function getIntervalMs() {
+  const sec = parseInt(getSetting("interval") || "60", 10);
+  return (isNaN(sec) || sec < 10 ? 60 : sec) * 1000;
+}
+function updateIntervalLabel() {
+  const sec = parseInt(getSetting("interval") || "60", 10);
+  $("intervalLabel").textContent = (isNaN(sec) ? 60 : sec) + "秒ごとの要約結果";
+}
+
+// ドキュメントURL/IDからID部分を取り出す
+function extractDocId(input) {
+  if (!input) return "";
+  const m = String(input).match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
+  return m ? m[1] : String(input).trim();
+}
+
+// ===== 音声認識 =====
+function initRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  log("iframe内: " + (window.self !== window.top) + " / secureContext: " + window.isSecureContext);
+  if (!SR) {
+    showBanner("このブラウザは音声認識に対応していません（ChromeまたはEdgeをご利用ください）。", "error");
+    log("SpeechRecognition が存在しません");
+    return;
+  }
+  log("SpeechRecognition は利用可能");
+
+  recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "ja-JP";
+
+  recognition.onstart = () => log("● onstart: 認識開始");
+  recognition.onaudiostart = () => log("● onaudiostart: 音声取り込み開始");
+  recognition.onspeechstart = () => log("● onspeechstart: 発話検出");
+
+  recognition.onresult = (event) => {
+    let final = "", interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) final += t; else interim += t;
+    }
+    if (final) {
+      transcripts.push(final);
+      renderTranscripts();
+      log("✓ 確定: " + final);
+    }
+    $("interimBox").innerHTML = interim ? '<div class="interim">' + escapeHtml(interim) + "</div>" : "";
+  };
+
+  recognition.onerror = (event) => {
+    log("✗ onerror: " + event.error + (event.message ? " / " + event.message : ""));
+    if (event.error === "aborted" || event.error === "no-speech") return;
+    const messages = {
+      "not-allowed": "マイクへのアクセスが許可されていません。ブラウザ/OSのマイク設定を確認してください。",
+      "service-not-allowed": "音声認識サービスがこの環境で利用できません。",
+      "network": "音声認識サーバーに接続できません（ネットワーク/プロキシ）。",
+      "audio-capture": "マイクが見つかりません。OS側のマイク許可を確認してください。",
+      "language-not-supported": "日本語認識がサポートされていません。"
+    };
+    showBanner(messages[event.error] || ("音声認識エラー: " + event.error), "error");
+    if (["not-allowed","service-not-allowed","network","audio-capture","language-not-supported"].includes(event.error)) {
+      stopListening();
+    }
+  };
+
+  recognition.onend = () => {
+    log("onend: セッション終了");
+    if (isListening) {
+      setTimeout(() => {
+        if (isListening) { try { recognition.start(); } catch (e) { log("再開失敗: " + e.message); } }
+      }, 300);
+    }
+  };
+}
+
+async function startListening() {
+  clearBanner();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showBanner("このブラウザではマイクAPIが使えません。", "error");
+    return;
+  }
+  try {
+    log("getUserMedia 事前チェック...");
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    log("✓ マイク取得成功: " + (stream.getAudioTracks().map(t => t.label).join(", ") || "(ラベル空)"));
+    stream.getTracks().forEach(t => t.stop());
+  } catch (e) {
+    log("✗ getUserMedia 失敗: " + e.name + " / " + e.message);
+    showBanner("マイクを取得できません（" + e.name + "）。ブラウザ/OSの設定を確認してください。", "error");
+    return;
+  }
+  isListening = true;
+  updateRecUI();
+  try { recognition.start(); log("recognition.start() 呼び出し"); }
+  catch (e) { log("start例外: " + e.message); }
+
+  // 要約タイマー開始
+  if (summaryTimer) clearInterval(summaryTimer);
+  summaryTimer = setInterval(runSummary, getIntervalMs());
+}
+
+function stopListening() {
+  isListening = false;
+  updateRecUI();
+  if (recognition) recognition.stop();
+  if (summaryTimer) { clearInterval(summaryTimer); summaryTimer = null; }
+}
+
+function updateRecUI() {
+  const btn = $("recBtn");
+  if (isListening) {
+    btn.className = "btn-rec active";
+    btn.innerHTML = "■ 停止";
+    $("recDot").style.display = "inline-block";
+  } else {
+    btn.className = "btn-rec idle";
+    btn.innerHTML = "🎤 録音開始";
+    $("recDot").style.display = "none";
+  }
+}
+
+// ===== 描画 =====
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+function renderTranscripts() {
+  $("transcriptEmpty").style.display = transcripts.length ? "none" : "block";
+  $("transcriptBox").innerHTML = transcripts.length
+    ? '<div class="transcript">' + escapeHtml(transcripts.join("")) + "</div>" : "";
+}
+function renderSummaries() {
+  $("summaryEmpty").style.display = summaries.length ? "none" : "block";
+  $("summaryBox").innerHTML = summaries.map(s =>
+    '<div class="summary-card"><div class="time">' + escapeHtml(s.time) +
+    '</div><div class="text">' + escapeHtml(s.text) + "</div></div>"
+  ).join("");
+}
+
+// ===== Gemini 要約 =====
+async function fetchGeminiSummary(text) {
+  const apiKey = getSetting("apiKey");
+  const model = getSetting("model") || "gemini-2.5-flash";
+  if (!apiKey) throw new Error("APIキーが未設定です。");
+
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/" +
+              encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(apiKey);
+  const payload = {
+    contents: [{ parts: [{ text }] }],
+    systemInstruction: { parts: [{ text: "以下の音声を文字起こししたテキストを簡潔に要約してください。箇条書きで分かりやすくまとめてください。" }] }
+  };
+  const delays = [1000, 2000, 4000, 8000];
+  for (let i = 0; i < 4; i++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error("HTTP " + res.status + " " + errText.slice(0, 200));
+      }
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "要約を取得できませんでした。";
+    } catch (e) {
+      log("要約リトライ " + (i + 1) + ": " + e.message);
+      if (i === 3) throw e;
+      await new Promise(r => setTimeout(r, delays[i]));
+    }
+  }
+}
+
+// ===== GAS 連携（書き込み）=====
+async function sendToGoogleDocs(summaryText) {
+  const gasUrl = getSetting("gasUrl");
+  const docId = extractDocId(getSetting("docUrl"));
+  if (!gasUrl) { log("GAS URL未設定のため転記スキップ"); return; }
+  try {
+    // text/plain にすることでCORSプリフライトを回避（GASはプリフライト非対応のため）
+    await fetch(gasUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "write", summary: summaryText, docId: docId, timestamp: new Date().toISOString() })
+    });
+    log("ドキュメントへ送信しました");
+  } catch (e) {
+    log("ドキュメント送信エラー: " + e.message);
+  }
+}
+
+// ===== 接続テスト =====
+async function testConnection() {
+  clearBanner();
+  const gasUrl = getSetting("gasUrl");
+  const docId = extractDocId(getSetting("docUrl"));
+  if (!gasUrl) { showBanner("GAS URLを入力して保存してください。", "error"); return; }
+  if (!docId) { showBanner("ドキュメントURLを入力して保存してください。", "error"); return; }
+  showBanner("接続テスト中...", "ok");
+  try {
+    const res = await fetch(gasUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "validate", docId: docId })
+    });
+    const data = await res.json();
+    if (data.status === "success") {
+      showBanner("接続OK：書き込み先ドキュメント「" + escapeHtml(data.title) + "」を確認しました。", "ok");
+    } else {
+      showBanner("GASエラー：" + escapeHtml(data.message || "不明なエラー"), "error");
+    }
+  } catch (e) {
+    // 応答が読めない環境向けフォールバック
+    log("テスト応答の読み取り失敗: " + e.message);
+    showBanner("テスト要求は送信しました。応答を読み取れなかったため、ドキュメント側に反映されるか直接ご確認ください。", "ok");
+  }
+}
+
+// ===== 要約実行 =====
+async function runSummary() {
+  if (transcripts.length <= lastSummarizedIndex) return;
+  $("summarizingFlag").style.display = "inline";
+  const textToSummarize = transcripts.join("\n");
+  try {
+    const summary = await fetchGeminiSummary(textToSummarize);
+    summaries.unshift({ time: new Date().toLocaleTimeString(), text: summary });
+    renderSummaries();
+    lastSummarizedIndex = transcripts.length;
+    await sendToGoogleDocs(summary);
+  } catch (e) {
+    log("要約エラー: " + e.message);
+    showBanner("要約に失敗しました：" + escapeHtml(e.message), "error");
+  } finally {
+    $("summarizingFlag").style.display = "none";
+  }
+}
+
+// ===== イベント =====
+$("saveBtn").addEventListener("click", saveSettings);
+$("testBtn").addEventListener("click", testConnection);
+$("recBtn").addEventListener("click", () => { isListening ? stopListening() : startListening(); });
+$("summarizeNowBtn").addEventListener("click", runSummary);
+$("toggleSettings").addEventListener("click", () => {
+  const p = $("settingsPanel");
+  p.style.display = (p.style.display === "none") ? "block" : "none";
+});
+$("toggleDebug").addEventListener("click", () => {
+  const d = $("debug");
+  d.style.display = (d.style.display === "block") ? "none" : "block";
+});
+
+// ===== 初期化 =====
+loadSettings();
+initRecognition();
+// APIキー未設定なら設定を開いたまま、設定済みなら畳む
+if (getSetting("apiKey")) { $("settingsPanel").style.display = "none"; }
+</script>
+</body>
+</html>
